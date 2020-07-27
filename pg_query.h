@@ -46,6 +46,7 @@ extern "C" {
 PgQueryNormalizeResult pg_query_normalize(const char* input);
 PgQueryScanResult pg_query_scan(const char* input);
 PgQueryParseResult pg_query_parse(const char* input);
+PgQueryParseResult pg_query_parse_protobuf(const char* input);
 PgQueryPlpgsqlParseResult pg_query_parse_plpgsql(const char* input);
 
 PgQueryFingerprintResult pg_query_fingerprint(const char* input);

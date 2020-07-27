@@ -2,6 +2,19 @@
 
 All versions are tagged by the major Postgres version, plus an individual semver for this library itself.
 
+## 12-1.0.0   UNRELEASED
+
+* Backwards incompatible changes
+  - CreateForeignTableStmt.base directly references CreateStmt fields (instead of having an intermediate Node)
+  - CreateStmt.relation directly references RangeVar (instead of having an intermediate Node)
+  - ColumnDef.typename directly references TypeName (instead of having an intermediate Node)
+  - AlterRoleStmt.role directly references RoleSpec (instead of having an intermediate Node)
+  - JSON format changes
+    - Certain special HTML characters (such as "<" and ">") are now escaped to conform with the JSON spec (e.g. "<" is escaped as "\\u003c")
+    - Enums: Default values (0) are no longer output
+    - Enums: All values are output with their string name, not their integer value
+
+
 ## 10-1.0.2
 
 * Avoid compiler warning due to unused result in pg_query_parse_plpgsql
