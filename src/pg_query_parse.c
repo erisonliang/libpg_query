@@ -118,11 +118,11 @@ PgQueryParseResult pg_query_parse(const char* input)
 	return result;
 }
 
-PgQueryParseResult pg_query_parse_protobuf(const char* input)
+PgQueryProtobufParseResult pg_query_parse_protobuf(const char* input)
 {
 	MemoryContext ctx = NULL;
 	PgQueryInternalParsetreeAndError parsetree_and_error;
-	PgQueryParseResult result = {0};
+	PgQueryProtobufParseResult result = {};
 
 	ctx = pg_query_enter_memory_context("pg_query_parse");
 
@@ -133,14 +133,11 @@ PgQueryParseResult pg_query_parse_protobuf(const char* input)
 	result.error = parsetree_and_error.error;
 
 	if (parsetree_and_error.tree != NULL) {
-		char *tree_protobuf;
+		PgQueryProtobuf tree_protobuf;
 
-		tree_protobuf = pg_query_nodes_to_protobuf(parsetree_and_error.tree);
-
-		result.parse_tree = strdup(tree_protobuf);
-		pfree(tree_protobuf);
+		result.parse_tree = pg_query_nodes_to_protobuf(parsetree_and_error.tree);
 	} else {
-		result.parse_tree = strdup("");
+		result.parse_tree.data = strdup("");
 	}
 
 	pg_query_exit_memory_context(ctx);
@@ -155,5 +152,15 @@ void pg_query_free_parse_result(PgQueryParseResult result)
   }
 
   free(result.parse_tree);
+  free(result.stderr_buffer);
+}
+
+void pg_query_free_protobuf_parse_result(PgQueryProtobufParseResult result)
+{
+  if (result.error) {
+		pg_query_free_error(result.error);
+  }
+
+  free(result.parse_tree.data);
   free(result.stderr_buffer);
 }

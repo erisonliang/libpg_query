@@ -8,6 +8,7 @@ PGDIRBZ2 = $(root_dir)/tmp/postgres.tar.bz2
 PG_VERSION = 12.3
 
 IGNORED_PROTOBUF_FILES := $(wildcard protobuf/protobuf-v3.12.0/google/protobuf/*test.cc) \
+ $(wildcard protobuf/protobuf-v3.12.0/google/protobuf/*test.pb.cc) \
 $(wildcard protobuf/protobuf-v3.12.0/google/protobuf/test_*.cc) \
 $(wildcard protobuf/protobuf-v3.12.0/google/protobuf/unittest_*.cc) \
 protobuf/protobuf-v3.12.0/google/protobuf/map_lite_test_util.cc

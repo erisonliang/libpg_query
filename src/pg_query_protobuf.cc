@@ -96,19 +96,27 @@ extern "C"
 
 static void _outNode(pg_query::Node*, const void *);
 
-extern "C" char *
+extern "C" PgQueryProtobuf
 pg_query_nodes_to_protobuf(const void *obj)
 {
-  if (obj == NULL)
-    return pstrdup("");
+  PgQueryProtobuf protobuf;
+  if (obj == NULL) {
+    protobuf.data = strdup("");
+    protobuf.len = 0;
+    return protobuf;
+  }
 
-	pg_query::Node root_node;
+  pg_query::Node root_node;
 
   _outNode(&root_node, obj);
 
   std::string output;
   root_node.SerializeToString(&output);
-  return pstrdup(output.c_str());
+
+  protobuf.data = (char*) calloc(output.size(), sizeof(char));
+  memcpy(protobuf.data, output.data(), output.size());
+  protobuf.len = output.size();
+  return protobuf;
 }
 
 extern "C" char *
