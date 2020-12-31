@@ -7,12 +7,27 @@ PGDIRBZ2 = $(root_dir)/tmp/postgres.tar.bz2
 
 PG_VERSION = 13.1
 
+PROTOBUF_VERSION = v3.14.0
+
+IGNORED_PROTOBUF_FILES := $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/*test.cc) \
+ $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/*test.pb.cc) \
+$(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/test_*.cc) \
+$(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/unittest_*.cc) \
+protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/map_lite_test_util.cc
+
 SRC_FILES := $(wildcard src/*.c src/postgres/*.c) protobuf-c/protobuf-c.c protobuf/scan_output.pb-c.c
-OBJ_FILES := $(SRC_FILES:.c=.o)
-NOT_OBJ_FILES := src/pg_query_fingerprint_defs.o src/pg_query_fingerprint_conds.o src/pg_query_json_defs.o src/pg_query_json_conds.o src/postgres/guc-file.o src/postgres/scan.o src/pg_query_json_helper.o
+CXX_SRC_FILES := $(wildcard src/*.cc) protobuf/parse_tree.pb.cc \
+$(filter-out $(IGNORED_PROTOBUF_FILES), $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/*.cc)) \
+$(filter-out $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/stubs/*test.cc), $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/stubs/*.cc)) \
+$(filter-out $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/io/*test.cc), $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/io/*.cc)) \
+$(filter-out $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/util/*test.cc), $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/util/*.cc)) \
+$(filter-out $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/util/internal/*test.cc), $(wildcard protobuf/protobuf-$(PROTOBUF_VERSION)/google/protobuf/util/internal/*.cc))
+OBJ_FILES := $(SRC_FILES:.c=.o) $(CXX_SRC_FILES:.cc=.o)
+NOT_OBJ_FILES := src/pg_query_fingerprint_defs.o src/pg_query_fingerprint_conds.o src/pg_query_json_defs.o src/pg_query_json_conds.o src/pg_query_protobuf_defs.o src/pg_query_protobuf_conds.o src/postgres/guc-file.o src/postgres/scan.o src/pg_query_json_helper.o
 OBJ_FILES := $(filter-out $(NOT_OBJ_FILES), $(OBJ_FILES))
 
 CFLAGS  = -I. -I./src/postgres/include -Wall -Wno-unused-function -Wno-unused-value -Wno-unused-variable -fno-strict-aliasing -fwrapv -fPIC
+CXXFLAGS = -I. -I./src/postgres/include -I./protobuf/protobuf-$(PROTOBUF_VERSION) -DHAVE_PTHREAD -std=c++11 -Wall -pedantic -Wno-zero-length-array -Wno-c99-extensions -fwrapv -fPIC
 LIBPATH = -L.
 
 PG_CONFIGURE_FLAGS = -q --without-readline --without-zlib
@@ -20,9 +35,11 @@ PG_CFLAGS = -fPIC
 
 ifeq ($(DEBUG),1)
 	CFLAGS += -O0 -g
+	CXXFLAGS += -O0 -g
 	PG_CONFIGURE_FLAGS += --enable-cassert --enable-debug
 else
 	CFLAGS += -O3 -g
+	CXXFLAGS += -O3 -g
 	PG_CFLAGS += -O3
 endif
 
@@ -88,11 +105,20 @@ extract_source: $(PGDIR)
 	@$(ECHO) compiling $(<)
 	@$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
+.cc.o:
+	@$(ECHO) compiling $(<)
+	@$(CXX) $(CXXFLAGS) -o $@ -c $<
+
 $(ARLIB): $(OBJ_FILES) Makefile
 	@$(AR) $@ $(OBJ_FILES)
 
 protobuf/scan_output.pb-c.c: protobuf/scan_output.proto
 	protoc --c_out=. protobuf/scan_output.proto
+
+protobuf/parse_tree.pb.cc protobuf/parse_tree.pb.h: protobuf/parse_tree.proto
+	protoc --cpp_out=. protobuf/parse_tree.proto
+
+src/pg_query_protobuf.cc: protobuf/parse_tree.pb.h
 
 EXAMPLES = examples/simple examples/scan examples/normalize examples/simple_error examples/normalize_error examples/simple_plpgsql
 examples: $(EXAMPLES)
@@ -104,22 +130,25 @@ examples: $(EXAMPLES)
 	examples/simple_plpgsql
 
 examples/simple: examples/simple.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/simple.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/simple.c $(ARLIB)
 
 examples/scan: examples/scan.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/scan.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/scan.c $(ARLIB)
 
 examples/normalize: examples/normalize.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/normalize.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/normalize.c $(ARLIB)
 
 examples/simple_error: examples/simple_error.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/simple_error.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/simple_error.c $(ARLIB)
 
 examples/normalize_error: examples/normalize_error.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/normalize_error.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/normalize_error.c $(ARLIB)
 
 examples/simple_plpgsql: examples/simple_plpgsql.c $(ARLIB)
-	$(CC) -I. -o $@ -g examples/simple_plpgsql.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ examples/simple_plpgsql.c $(ARLIB)
+
+examples/protobuf_test: examples/protobuf_test.cc $(ARLIB)
+	$(CXX) $(CXXFLAGS) -I. -o $@ examples/protobuf_test.cc $(ARLIB)
 
 TESTS = test/complex test/concurrency test/fingerprint test/normalize test/parse test/parse_plpgsql test/scan
 test: $(TESTS)
@@ -134,22 +163,22 @@ test: $(TESTS)
 	diff -Naur test/plpgsql_samples.expected.json test/plpgsql_samples.actual.json
 
 test/complex: test/complex.c $(ARLIB)
-	$(CC) -I. -Isrc -o $@ -g test/complex.c $(ARLIB)
+	$(CC) -I. -Isrc -o $@ -g -lstdc++ test/complex.c $(ARLIB)
 
 test/concurrency: test/concurrency.c test/parse_tests.c $(ARLIB)
-	$(CC) -I. -o $@ -pthread -g test/concurrency.c $(ARLIB)
+	$(CC) -I. -o $@ -pthread -g -lstdc++ test/concurrency.c $(ARLIB)
 
 test/fingerprint: test/fingerprint.c test/fingerprint_tests.c $(ARLIB)
-	$(CC) -I. -Isrc -o $@ -g test/fingerprint.c $(ARLIB)
+	$(CC) -I. -Isrc -o $@ -g -lstdc++ test/fingerprint.c $(ARLIB)
 
 test/normalize: test/normalize.c test/normalize_tests.c $(ARLIB)
-	$(CC) -I. -Isrc -o $@ -g test/normalize.c $(ARLIB)
+	$(CC) -I. -Isrc -o $@ -g -lstdc++ test/normalize.c $(ARLIB)
 
 test/parse: test/parse.c test/parse_tests.c $(ARLIB)
-	$(CC) -I. -o $@ -g test/parse.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ test/parse.c $(ARLIB)
 
 test/parse_plpgsql: test/parse_plpgsql.c $(ARLIB)
-	$(CC) -I. -o $@ -I./src -I./src/postgres/include -g test/parse_plpgsql.c $(ARLIB)
+	$(CC) -I. -o $@ -I./src -I./src/postgres/include -g -lstdc++ test/parse_plpgsql.c $(ARLIB)
 
 test/scan: test/scan.c test/scan_tests.c $(ARLIB)
-	$(CC) -I. -o $@ -g test/scan.c $(ARLIB)
+	$(CC) -I. -o $@ -g -lstdc++ test/scan.c $(ARLIB)
