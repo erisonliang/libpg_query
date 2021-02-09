@@ -397,8 +397,20 @@ static void deparseSelectStmt(StringInfo str, SelectStmt *stmt)
 		case SETOP_INTERSECT:
 		case SETOP_EXCEPT:
 			{
-				bool need_larg_parens = list_length(stmt->larg->sortClause) > 0 || stmt->larg->op != SETOP_NONE;
-				bool need_rarg_parens = list_length(stmt->rarg->sortClause) > 0 || stmt->rarg->op != SETOP_NONE || stmt->rarg->withClause != NULL;
+				bool need_larg_parens =
+					list_length(stmt->larg->sortClause) > 0 ||
+					stmt->larg->limitOffset != NULL ||
+					stmt->larg->limitCount != NULL ||
+					list_length(stmt->larg->lockingClause) > 0 ||
+					stmt->larg->withClause != NULL ||
+					stmt->larg->op != SETOP_NONE;
+				bool need_rarg_parens =
+					list_length(stmt->rarg->sortClause) > 0 ||
+					stmt->rarg->limitOffset != NULL ||
+					stmt->rarg->limitCount != NULL ||
+					list_length(stmt->rarg->lockingClause) > 0 ||
+					stmt->rarg->withClause != NULL ||
+					stmt->rarg->op != SETOP_NONE;
 				if (need_larg_parens)
 					appendStringInfoChar(str, '(');
 				deparseSelectStmt(str, stmt->larg);
@@ -724,7 +736,7 @@ static void deparseFuncCall(StringInfo str, FuncCall *func_call)
 	{
 		/*
 		 * Note that this is a bit odd, but "OVERLAY" is a keyword on its own merit, and only accepts the
-         * keyword parameter style when its called as a keyword, not as a regular function (i.e. pg_catalog.overlay)
+		 * keyword parameter style when its called as a keyword, not as a regular function (i.e. pg_catalog.overlay)
 		 */
 		appendStringInfoString(str, "OVERLAY(");
 		deparseNode(str, linitial(func_call->args), DEPARSE_NODE_CONTEXT_NONE);
@@ -971,7 +983,7 @@ static void deparseSubLink(StringInfo str, SubLink* sub_link)
 			return;
 		case ROWCOMPARE_SUBLINK:
 			// FIXME
-	        // format('(%s)', deparse_item(node['subselect']))
+			// format('(%s)', deparse_item(node['subselect']))
 			Assert(false);
 			return;
 		case EXPR_SUBLINK:
@@ -981,7 +993,7 @@ static void deparseSubLink(StringInfo str, SubLink* sub_link)
 			return;
 		case MULTIEXPR_SUBLINK:
 			// FIXME
-	        // format('(%s)', deparse_item(node['subselect']))
+			// format('(%s)', deparse_item(node['subselect']))
 			Assert(false);
 			return;
 		case ARRAY_SUBLINK:
@@ -991,7 +1003,7 @@ static void deparseSubLink(StringInfo str, SubLink* sub_link)
 			return;
 		case CTE_SUBLINK: /* for SubPlans only */
 			// FIXME
-	        // format('(%s)', deparse_item(node['subselect']))
+			// format('(%s)', deparse_item(node['subselect']))
 			Assert(false);
 			return;
 	}
@@ -1431,7 +1443,10 @@ static void deparseWithClause(StringInfo str, WithClause *with_clause)
 static void deparseJoinExpr(StringInfo str, JoinExpr *join_expr)
 {
 	ListCell *lc;
+	bool need_parens = join_expr->alias != NULL;
 
+	if (need_parens)
+		appendStringInfoChar(str, '(');
 	deparseNode(str, join_expr->larg, DEPARSE_NODE_CONTEXT_NONE);
 	appendStringInfoChar(str, ' ');
 
@@ -1481,8 +1496,14 @@ static void deparseJoinExpr(StringInfo str, JoinExpr *join_expr)
 			if (lnext(join_expr->usingClause, lc))
 				appendStringInfoString(str, ", ");
 		}
-		appendStringInfoChar(str, ')');
+		appendStringInfoString(str, ") ");
 	}
+
+	if (need_parens)
+		appendStringInfoString(str, ") ");
+
+	if (join_expr->alias != NULL)
+		deparseAlias(str, join_expr->alias);
 
 	removeTrailingSpace(str);
 }
@@ -1648,7 +1669,7 @@ static void deparseTypeCast(StringInfo str, TypeCast *type_cast)
 
 	/*
 	 * Handle "bool" or "false" in the statement, which is represented as a typecast
-     * (other boolean casts should be represented as a cast, i.e. don't need special handling)
+	 * (other boolean casts should be represented as a cast, i.e. don't need special handling)
 	 */
 	if (IsA(type_cast->arg, A_Const) &&
 		list_length(type_cast->typeName->names) == 2 &&
@@ -2049,10 +2070,10 @@ static void deparseColumnDef(StringInfo str, ColumnDef *column_def)
 
 	// TODO
 	/*
-      if node['collClause']
-        output << 'COLLATE'
-        output += node['collClause']['CollateClause']['collname'].map(&method(:deparse_item))
-      end
+	  if node['collClause']
+		output << 'COLLATE'
+		output += node['collClause']['CollateClause']['collname'].map(&method(:deparse_item))
+	  end
 	  */
 }
 
@@ -2884,7 +2905,10 @@ static void deparseCreateFunctionStmt(StringInfo str, CreateFunctionStmt *create
 	appendStringInfoString(str, "CREATE ");
 	if (create_function_stmt->replace)
 		appendStringInfoString(str, "OR REPLACE ");
-	appendStringInfoString(str, "FUNCTION ");
+	if (create_function_stmt->is_procedure)
+		appendStringInfoString(str, "PROCEDURE ");
+	else
+		appendStringInfoString(str, "FUNCTION ");
 
 	foreach(lc, create_function_stmt->funcname)
 	{
@@ -3205,9 +3229,27 @@ static void deparseDefElem(StringInfo str, DefElem *def_elem, DeparseNodeContext
 	{
 		appendStringInfoString(str, "NOREPLICATION");
 	}
+	else if (strcmp(def_elem->defname, "security") == 0 && intVal(def_elem->arg) == 1)
+	{
+		appendStringInfoString(str, "SECURITY DEFINER");
+	}
+	else if (strcmp(def_elem->defname, "security") == 0 && intVal(def_elem->arg) == 0)
+	{
+		appendStringInfoString(str, "SECURITY INVOKER");
+	}
 	else if (strcmp(def_elem->defname, "set") == 0 && IsA(def_elem->arg, VariableSetStmt))
 	{
 		deparseVariableSetStmt(str, castNode(VariableSetStmt, def_elem->arg));
+	}
+	else if (strcmp(def_elem->defname, "rolemembers") == 0)
+	{
+		appendStringInfoString(str, "ROLE ");
+		foreach(lc, castNode(List, def_elem->arg))
+		{
+			deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+			if (lnext(castNode(List, def_elem->arg), lc))
+				appendStringInfoString(str, ", ");
+		}
 	}
 	else if (context == DEPARSE_NODE_CONTEXT_EXPLAIN || context == DEPARSE_NODE_CONTEXT_CREATE_FUNCTION || context == DEPARSE_NODE_CONTEXT_COPY)
 	{
@@ -3892,8 +3934,7 @@ static void deparseDropStmt(StringInfo str, DropStmt *drop_stmt)
 			appendStringInfoString(str, "POLICY ");
 			break;
 		case OBJECT_PROCEDURE:
-			// TODO
-			Assert(false);
+			appendStringInfoString(str, "PROCEDURE ");
 			break;
 		case OBJECT_PUBLICATION:
 			appendStringInfoString(str, "PUBLICATION ");
@@ -4105,7 +4146,10 @@ static void deparseObjectWithArgs(StringInfo str, ObjectWithArgs *object_with_ar
 		appendStringInfoChar(str, '(');
 		foreach(lc, object_with_args->objargs)
 		{
-			deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+			if (lfirst(lc) == NULL)
+				appendStringInfoString(str, "NONE");
+			else
+				deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
 			if (lnext(object_with_args->objargs, lc))
 				appendStringInfoString(str, ", ");
 		}
@@ -4280,7 +4324,10 @@ static void deparseAlterTableCmd(StringInfo str, AlterTableCmd *alter_table_cmd,
 			Assert(false);
 			break;
 		case AT_AlterColumnType: /* alter column type */
-			appendStringInfoString(str, "ALTER COLUMN ");
+			if (context == DEPARSE_NODE_CONTEXT_ALTER_TYPE)
+				appendStringInfoString(str, "ALTER ATTRIBUTE ");
+			else
+				appendStringInfoString(str, "ALTER COLUMN ");
 			options = "TYPE";
 			break;
 		case AT_AlterColumnGenericOptions: /* alter column OPTIONS (...) */
@@ -4459,8 +4506,92 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 
 	switch (rename_stmt->renameType)
 	{
+		case OBJECT_AGGREGATE:
+			appendStringInfoString(str, "AGGREGATE ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_COLLATION:
+			appendStringInfoString(str, "COLLATION ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+			appendStringInfoString(str, " RENAME ");
+			break;
 		case OBJECT_CONVERSION:
 			appendStringInfoString(str, "CONVERSION ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_DATABASE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_DOMAIN:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_DOMCONSTRAINT:
+			appendStringInfoString(str, "DOMAIN ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+			appendStringInfoString(str, " RENAME CONSTRAINT ");
+			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
+			appendStringInfoChar(str, ' ');
+			break;
+		case OBJECT_FDW:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_FUNCTION:
+			appendStringInfoString(str, "FUNCTION ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_ROLE:
+			appendStringInfoString(str, "ROLE ");
+			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_LANGUAGE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_OPCLASS:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_OPFAMILY:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_POLICY:
+			appendStringInfoString(str, "POLICY ");
+			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
+			appendStringInfoString(str, " ON ");
+			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_PROCEDURE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_PUBLICATION:
+			appendStringInfoString(str, "PUBLICATION ");
+			appendStringInfoString(str, quote_identifier(strVal(rename_stmt->object)));
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_ROUTINE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_SCHEMA:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_FOREIGN_SERVER:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_SUBSCRIPTION:
+			appendStringInfoString(str, "SUBSCRIPTION ");
 			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
 			appendStringInfoString(str, " RENAME ");
 			break;
@@ -4469,15 +4600,12 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME ");
 			break;
-		case OBJECT_TABCONSTRAINT:
-			appendStringInfoString(str, "TABLE ");
-			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
-			appendStringInfoString(str, " RENAME CONSTRAINT ");
-			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
-			appendStringInfoChar(str, ' ');
+		case OBJECT_SEQUENCE:
+			// TODO
+			Assert(false);
 			break;
-		case OBJECT_INDEX:
-			appendStringInfoString(str, "INDEX ");
+		case OBJECT_VIEW:
+			appendStringInfoString(str, "VIEW ");
 			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME ");
 			break;
@@ -4486,15 +4614,14 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME ");
 			break;
-		case OBJECT_TABLESPACE:
-			appendStringInfoString(str, "TABLESPACE ");
-			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
-			appendStringInfoString(str, " RENAME ");
-			break;
-		case OBJECT_VIEW:
-			appendStringInfoString(str, "VIEW ");
+		case OBJECT_INDEX:
+			appendStringInfoString(str, "INDEX ");
 			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_FOREIGN_TABLE:
+			// TODO
+			Assert(false);
 			break;
 		case OBJECT_COLUMN:
 			appendStringInfoString(str, "TABLE ");
@@ -4503,19 +4630,9 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
 			appendStringInfoChar(str, ' ');
 			break;
-		case OBJECT_COLLATION:
-			appendStringInfoString(str, "COLLATION ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
-			appendStringInfoString(str, " RENAME ");
-			break;
-		case OBJECT_TYPE:
-			appendStringInfoString(str, "TYPE ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
-			appendStringInfoString(str, " RENAME ");
-			break;
-		case OBJECT_DOMCONSTRAINT:
-			appendStringInfoString(str, "DOMAIN ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
+		case OBJECT_TABCONSTRAINT:
+			appendStringInfoString(str, "TABLE ");
+			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME CONSTRAINT ");
 			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
 			appendStringInfoChar(str, ' ');
@@ -4534,26 +4651,38 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
 			appendStringInfoString(str, " RENAME ");
 			break;
-		case OBJECT_AGGREGATE:
-			appendStringInfoString(str, "AGGREGATE ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
-			appendStringInfoString(str, " RENAME ");
+		case OBJECT_EVENT_TRIGGER:
+			// TODO
+			Assert(false);
 			break;
-		case OBJECT_FUNCTION:
-			appendStringInfoString(str, "FUNCTION ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
-			appendStringInfoString(str, " RENAME ");
-			break;
-		case OBJECT_SUBSCRIPTION:
-			appendStringInfoString(str, "SUBSCRIPTION ");
-			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
-			appendStringInfoString(str, " RENAME ");
-			break;
-		case OBJECT_POLICY:
-			appendStringInfoString(str, "POLICY ");
+		case OBJECT_TABLESPACE:
+			appendStringInfoString(str, "TABLESPACE ");
 			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
-			appendStringInfoString(str, " ON ");
-			deparseRangeVar(str, rename_stmt->relation, DEPARSE_NODE_CONTEXT_NONE);
+			appendStringInfoString(str, " RENAME ");
+			break;
+		case OBJECT_STATISTIC_EXT:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TSPARSER:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TSDICTIONARY:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TSTEMPLATE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TSCONFIGURATION:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TYPE:
+			appendStringInfoString(str, "TYPE ");
+			deparseNode(str, rename_stmt->object, DEPARSE_NODE_CONTEXT_IDENTIFIER);
 			appendStringInfoString(str, " RENAME ");
 			break;
 		case OBJECT_ATTRIBUTE:
@@ -4562,6 +4691,7 @@ static void deparseRenameStmt(StringInfo str, RenameStmt *rename_stmt)
 			appendStringInfoString(str, " RENAME ATTRIBUTE ");
 			appendStringInfoString(str, quote_identifier(rename_stmt->subname));
 			appendStringInfoChar(str, ' ');
+			break;
 		default:
 			// TODO: Add additional object types
 			Assert(false);
@@ -4778,9 +4908,48 @@ static void deparseLockStmt(StringInfo str, LockStmt *lock_stmt)
 		if (lnext(lock_stmt->relations, lc))
 			appendStringInfoString(str, ", ");
 	}
+	appendStringInfoChar(str, ' ');
 
-	// TODO: mode
-	// TODO: nowait
+	if (lock_stmt->mode != AccessExclusiveLock)
+	{
+		appendStringInfoString(str, "IN ");
+		switch (lock_stmt->mode)
+		{
+			case AccessShareLock:
+				appendStringInfoString(str, "ACCESS SHARE ");
+				break;
+			case RowShareLock:
+				appendStringInfoString(str, "ROW SHARE ");
+				break;
+			case RowExclusiveLock:
+				appendStringInfoString(str, "ROW EXCLUSIVE ");
+				break;
+			case ShareUpdateExclusiveLock:
+				appendStringInfoString(str, "SHARE UPDATE EXCLUSIVE ");
+				break;
+			case ShareLock:
+				appendStringInfoString(str, "SHARE ");
+				break;
+			case ShareRowExclusiveLock:
+				appendStringInfoString(str, "SHARE ROW EXCLUSIVE ");
+				break;
+			case ExclusiveLock:
+				appendStringInfoString(str, "EXCLUSIVE ");
+				break;
+			case AccessExclusiveLock:
+				appendStringInfoString(str, "ACCESS EXCLUSIVE ");
+				break;
+			default:
+				Assert(false);
+				break;
+		}
+		appendStringInfoString(str, "MODE ");
+	}
+
+	if (lock_stmt->nowait)
+		appendStringInfoString(str, "NOWAIT ");
+
+	removeTrailingSpace(str);
 }
 
 static void deparseConstraintsSetStmt(StringInfo str, ConstraintsSetStmt *constraints_set_stmt)
@@ -5121,6 +5290,9 @@ static void deparseGrantStmt(StringInfo str, GrantStmt *grant_stmt)
 	else
 		appendStringInfoString(str, "REVOKE ");
 
+	if (!grant_stmt->is_grant && grant_stmt->grant_option)
+		appendStringInfoString(str, "GRANT OPTION FOR ");
+
 	if (list_length(grant_stmt->privileges) > 0)
 	{
 		foreach(lc, grant_stmt->privileges)
@@ -5265,7 +5437,7 @@ static void deparseGrantStmt(StringInfo str, GrantStmt *grant_stmt)
 		appendStringInfoChar(str, ' ');
 	}
 
-	if (grant_stmt->grant_option)
+	if (grant_stmt->is_grant && grant_stmt->grant_option)
 		appendStringInfoString(str, "WITH GRANT OPTION ");
 
 	deparseOptDropBehavior(str, grant_stmt->behavior);
@@ -5277,7 +5449,21 @@ static void deparseAccessPriv(StringInfo str, AccessPriv *access_priv)
 {
 	ListCell *lc;
 
-	appendStringInfoString(str, access_priv->priv_name);
+	if (access_priv->priv_name != NULL)
+	{
+		if (strcmp(access_priv->priv_name, "select") == 0)
+			appendStringInfoString(str, "select");
+		else if (strcmp(access_priv->priv_name, "references") == 0)
+			appendStringInfoString(str, "references");
+		else if (strcmp(access_priv->priv_name, "create") == 0)
+			appendStringInfoString(str, "create");
+		else
+			appendStringInfoString(str, quote_identifier(access_priv->priv_name));
+	}
+	else
+	{
+		appendStringInfoString(str, "ALL");
+	}
 	appendStringInfoChar(str, ' ');
 
 	if (list_length(access_priv->cols) > 0)
@@ -5987,6 +6173,82 @@ static void deparseAlterPolicyStmt(StringInfo str, AlterPolicyStmt *alter_policy
 	}
 }
 
+static void deparseCreatePublicationStmt(StringInfo str, CreatePublicationStmt *create_publication_stmt)
+{
+	ListCell *lc = NULL;
+
+	appendStringInfoString(str, "CREATE PUBLICATION ");
+	appendStringInfoString(str, quote_identifier(create_publication_stmt->pubname));
+	appendStringInfoChar(str, ' ');
+
+	if (list_length(create_publication_stmt->tables) > 0)
+	{
+		appendStringInfoString(str, "FOR TABLE ");
+		foreach (lc, create_publication_stmt->tables)
+		{
+			deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+			if (lnext(create_publication_stmt->tables, lc))
+				appendStringInfoString(str, ", ");
+		}
+	}
+	else if (create_publication_stmt->for_all_tables)
+	{
+		appendStringInfoString(str, "FOR ALL TABLES ");
+	}
+
+	deparseOptDefinition(str, create_publication_stmt->options);
+}
+
+static void deparseAlterPublicationStmt(StringInfo str, AlterPublicationStmt *alter_publication_stmt)
+{
+	ListCell *lc = NULL;
+
+	appendStringInfoString(str, "ALTER PUBLICATION ");
+	appendStringInfoString(str, quote_identifier(alter_publication_stmt->pubname));
+	appendStringInfoChar(str, ' ');
+
+	if (list_length(alter_publication_stmt->tables) > 0)
+	{
+		switch (alter_publication_stmt->tableAction)
+		{
+			case DEFELEM_SET:
+				appendStringInfoString(str, "SET TABLE ");
+				break;
+			case DEFELEM_ADD:
+				appendStringInfoString(str, "ADD TABLE ");
+				break;
+			case DEFELEM_DROP:
+				appendStringInfoString(str, "DROP TABLE ");
+				break;
+			case DEFELEM_UNSPEC:
+				Assert(false);
+				break;
+		}
+
+		foreach (lc, alter_publication_stmt->tables)
+		{
+			deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+			if (lnext(alter_publication_stmt->tables, lc))
+				appendStringInfoString(str, ", ");
+		}
+	}
+	else if (list_length(alter_publication_stmt->options) > 0)
+	{
+		appendStringInfoString(str, "SET (");
+		foreach (lc, alter_publication_stmt->options)
+		{
+			deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+			if (lnext(alter_publication_stmt->options, lc))
+				appendStringInfoString(str, ", ");
+		}
+		appendStringInfoChar(str, ')');
+	}
+	else
+	{
+		Assert(false);
+	}
+}
+
 static void deparseAlterSeqStmt(StringInfo str, AlterSeqStmt *alter_seq_stmt)
 {
 	ListCell *lc;
@@ -6013,28 +6275,149 @@ static void deparseCommentStmt(StringInfo str, CommentStmt *comment_stmt)
 
 	switch (comment_stmt->objtype)
 	{
+		case OBJECT_COLUMN:
+			appendStringInfoString(str, "COLUMN ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_INDEX:
+			appendStringInfoString(str, "INDEX ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
 		case OBJECT_SEQUENCE:
 			appendStringInfoString(str, "SEQUENCE ");
-			deparseNode(str, comment_stmt->object, DEPARSE_NODE_CONTEXT_NONE);
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_STATISTIC_EXT:
+			appendStringInfoString(str, "STATISTICS ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_TABLE:
+			appendStringInfoString(str, "TABLE ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_VIEW:
+			appendStringInfoString(str, "VIEW ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_MATVIEW:
+			appendStringInfoString(str, "MATERIALIZED VIEW ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_COLLATION:
+			appendStringInfoString(str, "COLLATION ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_CONVERSION:
+			appendStringInfoString(str, "CONVERSION ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_FOREIGN_TABLE:
+			appendStringInfoString(str, "FOREIGN TABLE ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_TSCONFIGURATION:
+			appendStringInfoString(str, "TEXT SEARCH CONFIGURATION ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_TSDICTIONARY:
+			appendStringInfoString(str, "TEXT SEARCH DICTIONARY ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_TSPARSER:
+			appendStringInfoString(str, "TEXT SEARCH PARSER ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_TSTEMPLATE:
+			appendStringInfoString(str, "TEXT SEARCH TEMPLATE ");
+			deparseAnyName(str, castNode(List, comment_stmt->object));
+			break;
+		case OBJECT_ACCESS_METHOD:
+			appendStringInfoString(str, "ACCESS METHOD ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_DATABASE:
+			appendStringInfoString(str, "DATABASE ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_EVENT_TRIGGER:
+			appendStringInfoString(str, "EVENT TRIGGER ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_EXTENSION:
+			appendStringInfoString(str, "EXTENSION ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_FDW:
+			appendStringInfoString(str, "FOREIGN DATA WRAPPER ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_LANGUAGE:
+			appendStringInfoString(str, "LANGUAGE ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_PUBLICATION:
+			appendStringInfoString(str, "PUBLICATION ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_ROLE:
+			appendStringInfoString(str, "ROLE ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_SCHEMA:
+			appendStringInfoString(str, "SCHEMA ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_FOREIGN_SERVER:
+			appendStringInfoString(str, "SERVER ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
 			break;
 		case OBJECT_SUBSCRIPTION:
 			appendStringInfoString(str, "SUBSCRIPTION ");
-			deparseNode(str, comment_stmt->object, DEPARSE_NODE_CONTEXT_NONE);
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
 			break;
-		case OBJECT_TRIGGER:
-			appendStringInfoString(str, "TRIGGER ");
-			l = castNode(List, comment_stmt->object);
-			deparseNode(str, llast(l), DEPARSE_NODE_CONTEXT_NONE);
-			appendStringInfoString(str, " ON ");
-			foreach (lc, l)
-			{
-				if (lnext(l, lc))
-				{
-					deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
-					if (foreach_current_index(lc) < list_length(l) - 2)
-						appendStringInfoChar(str, '.');
-				}
-			}
+		case OBJECT_TABLESPACE:
+			appendStringInfoString(str, "TABLESPACE ");
+			appendStringInfoString(str, quote_identifier(strVal(comment_stmt->object)));
+			break;
+		case OBJECT_TYPE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_DOMAIN:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_AGGREGATE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_FUNCTION:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_OPERATOR:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TABCONSTRAINT:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_DOMCONSTRAINT:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_POLICY:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_PROCEDURE:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_ROUTINE:
+			// TODO
+			Assert(false);
 			break;
 		case OBJECT_RULE:
 			appendStringInfoString(str, "RULE ");
@@ -6051,8 +6434,43 @@ static void deparseCommentStmt(StringInfo str, CommentStmt *comment_stmt)
 				}
 			}
 			break;
-		default:
+		case OBJECT_TRANSFORM:
 			// TODO
+			Assert(false);
+			break;
+		case OBJECT_TRIGGER:
+			appendStringInfoString(str, "TRIGGER ");
+			l = castNode(List, comment_stmt->object);
+			deparseNode(str, llast(l), DEPARSE_NODE_CONTEXT_NONE);
+			appendStringInfoString(str, " ON ");
+			foreach (lc, l)
+			{
+				if (lnext(l, lc))
+				{
+					deparseNode(str, lfirst(lc), DEPARSE_NODE_CONTEXT_NONE);
+					if (foreach_current_index(lc) < list_length(l) - 2)
+						appendStringInfoChar(str, '.');
+				}
+			}
+			break;
+		case OBJECT_OPCLASS:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_OPFAMILY:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_LARGEOBJECT:
+			// TODO
+			Assert(false);
+			break;
+		case OBJECT_CAST:
+			// TODO
+			Assert(false);
+			break;
+		default:
+			// No other cases are supported in the parser
 			Assert(false);
 			break;
 	}
@@ -6490,6 +6908,12 @@ static void deparseDropSubscriptionStmt(StringInfo str, DropSubscriptionStmt *dr
 		appendStringInfoString(str, "IF EXISTS ");
 
 	appendStringInfoString(str, drop_subscription_stmt->subname);
+}
+
+static void deparseCallStmt(StringInfo str, CallStmt *call_stmt)
+{
+	appendStringInfoString(str, "CALL ");
+	deparseFuncCall(str, call_stmt->funccall);
 }
 
 static void deparseAlterOwnerStmt(StringInfo str, AlterOwnerStmt *alter_owner_stmt)
@@ -7013,7 +7437,16 @@ static void deparseValue(StringInfo str, Value *value, DeparseNodeContext contex
 			}
 			break;
 		case T_BitString:
-			appendStringInfo(str, "B'%s'", value->val.str);
+			if (strlen(value->val.str) >= 1 && value->val.str[0] == 'x')
+			{
+				appendStringInfoChar(str, 'x');
+				deparseStringLiteral(str, value->val.str + 1);
+			}
+			else
+			{
+				appendStringInfoChar(str, 'B');
+				deparseStringLiteral(str, value->val.str);
+			}
 			break;
 		case T_Null:
 			appendStringInfoString(str, "NULL");
@@ -7335,6 +7768,12 @@ static void deparseNode(StringInfo str, Node *node, DeparseNodeContext context)
 		case T_AlterPolicyStmt:
 			deparseAlterPolicyStmt(str, (AlterPolicyStmt *) node);
 			break;
+		case T_CreatePublicationStmt:
+			deparseCreatePublicationStmt(str, (CreatePublicationStmt *) node);
+			break;
+		case T_AlterPublicationStmt:
+			deparseAlterPublicationStmt(str, (AlterPublicationStmt *) node);
+			break;
 		case T_AlterSeqStmt:
 			deparseAlterSeqStmt(str, (AlterSeqStmt *) node);
 			break;
@@ -7373,6 +7812,9 @@ static void deparseNode(StringInfo str, Node *node, DeparseNodeContext context)
 			break;
 		case T_DropSubscriptionStmt:
 			deparseDropSubscriptionStmt(str, (DropSubscriptionStmt *) node);
+			break;
+		case T_CallStmt:
+			deparseCallStmt(str, (CallStmt *) node);
 			break;
 		case T_AlterOwnerStmt:
 			deparseAlterOwnerStmt(str, (AlterOwnerStmt *) node);
@@ -7439,9 +7881,9 @@ static void deparseNode(StringInfo str, Node *node, DeparseNodeContext context)
 
 PgQueryDeparseResult pg_query_deparse_protobuf(PgQueryProtobuf parse_tree)
 {
-    PgQueryDeparseResult result = {0};
+	PgQueryDeparseResult result = {0};
 	StringInfoData str;
-    MemoryContext ctx;
+	MemoryContext ctx;
 	List *stmts;
 	ListCell *lc;
 
@@ -7474,7 +7916,7 @@ PgQueryDeparseResult pg_query_deparse_protobuf(PgQueryProtobuf parse_tree)
 		error->filename  = strdup(error_data->filename);
 		error->funcname  = strdup(error_data->funcname);
 		error->context   = NULL;
-		error->lineno    = error_data->lineno;
+		error->lineno	= error_data->lineno;
 		error->cursorpos = error_data->cursorpos;
 
 		result.error = error;
@@ -7484,14 +7926,14 @@ PgQueryDeparseResult pg_query_deparse_protobuf(PgQueryProtobuf parse_tree)
 
 	pg_query_exit_memory_context(ctx);
 
-    return result;
+	return result;
 }
 
 void pg_query_free_deparse_result(PgQueryDeparseResult result)
 {
-    if (result.error) {
-        pg_query_free_error(result.error);
-    }
+	if (result.error) {
+		pg_query_free_error(result.error);
+	}
 
-    free(result.query);
+	free(result.query);
 }

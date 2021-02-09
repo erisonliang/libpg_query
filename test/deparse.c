@@ -168,6 +168,11 @@ int run_tests_from_file(const char * filename) {
 }
 
 const char* regressFilenames[] = {
+	"prepared_xacts.sql",
+	"privileges.sql",
+	"psql_crosstab.sql",
+	"psql.sql",
+	"publication.sql",
 	"random.sql",
 	"rangefuncs.sql",
 	"rangetypes.sql",
@@ -234,7 +239,7 @@ const char* regressFilenames[] = {
 	"xml.sql",
 	"xmlmap.sql"
 };
-size_t regressFilenameCount = 65;
+size_t regressFilenameCount = 70;
 
 int main() {
 	size_t i;
